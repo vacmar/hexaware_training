@@ -1,0 +1,182 @@
+version: '3.8'
+
+services:
+  # ==================== API Gateway ====================
+  api-gateway:
+    build:
+      context: ./api_gateway
+      dockerfile: Dockerfile
+    container_name: logistics-api-gateway
+    ports:
+      - "8000:8000"
+    environment:
+      - AUTH_SERVICE_URL=http://auth-service:8001
+      - HUB_SERVICE_URL=http://hub-service:8002
+      - SHIPMENT_SERVICE_URL=http://shipment-service:8003
+      - TRACKING_SERVICE_URL=http://tracking-service:8004
+      - SECRET_KEY=${SECRET_KEY:-your-super-secret-key-change-in-production}
+      - DEBUG=true
+    depends_on:
+      - auth-service
+      - hub-service
+      - shipment-service
+      - tracking-service
+    networks:
+      - logistics-network
+    restart: unless-stopped
+
+  # ==================== Auth Service ====================
+  auth-service:
+    build:
+      context: .
+      dockerfile: auth_service/Dockerfile
+    container_name: logistics-auth-service
+    ports:
+      - "8001:8001"
+    environment:
+      - DATABASE_URL=postgresql://postgres:password@db:5432/logistics_db
+      - SECRET_KEY=${SECRET_KEY:-your-super-secret-key-change-in-production}
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./shared:/app/shared
+      - ./auth_service:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
+    networks:
+      - logistics-network
+    restart: unless-stopped
+
+  # ==================== Hub Service ====================
+  hub-service:
+    build:
+      context: .
+      dockerfile: hub_service/Dockerfile
+    container_name: logistics-hub-service
+    ports:
+      - "8002:8002"
+    environment:
+      - DATABASE_URL=postgresql://postgres:password@db:5432/logistics_db
+      - SECRET_KEY=${SECRET_KEY:-your-super-secret-key-change-in-production}
+      - AUTH_SERVICE_URL=http://auth-service:8001
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./shared:/app/shared
+      - ./hub_service:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8002 --reload
+    networks:
+      - logistics-network
+    restart: unless-stopped
+
+  # ==================== Shipment Service ====================
+  shipment-service:
+    build:
+      context: .
+      dockerfile: shipment_service/Dockerfile
+    container_name: logistics-shipment-service
+    ports:
+      - "8003:8003"
+    environment:
+      - DATABASE_URL=postgresql://postgres:password@db:5432/logistics_db
+      - SECRET_KEY=${SECRET_KEY:-your-super-secret-key-change-in-production}
+      - AUTH_SERVICE_URL=http://auth-service:8001
+      - HUB_SERVICE_URL=http://hub-service:8002
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./shared:/app/shared
+      - ./shipment_service:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8003 --reload
+    networks:
+      - logistics-network
+    restart: unless-stopped
+
+  # ==================== Tracking Service ====================
+  tracking-service:
+    build:
+      context: .
+      dockerfile: tracking_service/Dockerfile
+    container_name: logistics-tracking-service
+    ports:
+      - "8004:8004"
+    environment:
+      - DATABASE_URL=postgresql://postgres:password@db:5432/logistics_db
+      - SECRET_KEY=${SECRET_KEY:-your-super-secret-key-change-in-production}
+      - SHIPMENT_SERVICE_URL=http://shipment-service:8003
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./shared:/app/shared
+      - ./tracking_service:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8004 --reload
+    networks:
+      - logistics-network
+    restart: unless-stopped
+
+  # ==================== PostgreSQL Database ====================
+  db:
+    image: postgres:15-alpine
+    container_name: logistics-db
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=logistics_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - logistics-network
+    restart: unless-stopped
+
+  # ==================== Redis Cache ====================
+  redis:
+    image: redis:7-alpine
+    container_name: logistics-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - logistics-network
+    restart: unless-stopped
+
+  # ==================== pgAdmin (Optional) ====================
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: logistics-pgadmin
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=admin@logistics.com
+      - PGADMIN_DEFAULT_PASSWORD=admin
+    ports:
+      - "5050:80"
+    depends_on:
+      - db
+    networks:
+      - logistics-network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  logistics-network:
+    driver: bridge
